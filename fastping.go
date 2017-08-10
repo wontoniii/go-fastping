@@ -398,9 +398,9 @@ func (p *Pinger) Stop() {
 // Calls triggers the channel for done
 func (p *Pinger) StopAndSend() {
 	p.debugln("Stop(): close(p.ctx.stop)")
-	<-p.ctx.stop
 	close(p.ctx.stop)
 	p.debugln("Stop(): <-p.ctx.done")
+	p.ctx.done <- true
 	<-p.ctx.done
 }
 
