@@ -365,18 +365,18 @@ func (p *Pinger) RunLoop() {
 /*
  * Run a batch of pings for at most deadline Milliseconds
  */
-func (p *Pinger) RunBatchWithDeadline(freq, deadline time.Duration) (){
-	p.ctx = newContext()
-	p.runSync(freq, deadline)
-}
+// func (p *Pinger) RunBatchWithDeadline(freq, deadline time.Duration) (){
+// 	p.ctx = newContext()
+// 	p.runSync(freq, deadline)
+// }
 
 /*
  * Run a batch of pings for at most deadline Milliseconds
  */
-func (p *Pinger) RunBatchWithTotNumber(freq time.Duration, total int) (){
-	p.ctx = newContext()
-	p.runSync(freq, deadline)
-}
+// func (p *Pinger) RunBatchWithTotNumber(freq time.Duration, total int) (){
+// 	p.ctx = newContext()
+// 	p.runSync(freq, deadline)
+// }
 
 // Done returns a channel that is closed when RunLoop() is stopped by an error
 // or Stop(). It must be called after RunLoop() call. If not, it causes panic.
@@ -398,7 +398,8 @@ func (p *Pinger) Stop() {
 // Calls triggers the channel for done
 func (p *Pinger) StopAndSend() {
 	p.debugln("Stop(): close(p.ctx.stop)")
-	defer close(p.ctx.stop)
+	<-p.ctx.stop
+	close(p.ctx.stop)
 	p.debugln("Stop(): <-p.ctx.done")
 	<-p.ctx.done
 }
@@ -427,88 +428,88 @@ func (p *Pinger) listen(netProto string, source string) *icmp.PacketConn {
 /*
  * Run the ping cycle asynchronously
  */
-func (p *Pinger) runSync() {
-	p.debugln("Run(): Start")
-	var conn, conn6 *icmp.PacketConn
-	if p.hasIPv4 {
-		if conn = p.listen(ipv4Proto[p.network], p.source); conn == nil {
-			return
-		}
-		defer conn.Close()
-	}
-
-	if p.hasIPv6 {
-		if conn6 = p.listen(ipv6Proto[p.network], p.source6); conn6 == nil {
-			return
-		}
-		defer conn6.Close()
-	}
-
-	recv := make(chan *packet, 1)
-	recvCtx := newContext()
-	wg := new(sync.WaitGroup)
-
-	p.debugln("Run(): call recvICMP()")
-	if conn != nil {
-		wg.Add(1)
-		go p.recvICMP(conn, recv, recvCtx, wg)
-	}
-	if conn6 != nil {
-		wg.Add(1)
-		go p.recvICMP(conn6, recv, recvCtx, wg)
-	}
-
-	p.debugln("Run(): call sendICMP()")
-	queue, err := p.sendICMP(conn, conn6)
-
-	ticker := time.NewTicker(p.MaxRTT)
-	//TODO add deadline
-
-mainloop:
-	for {
-		select {
-		case <-p.ctx.stop:
-			p.debugln("Run(): <-p.ctx.stop")
-			break mainloop
-		case <-recvCtx.done:
-			p.debugln("Run(): <-recvCtx.done")
-			p.mu.Lock()
-			err = recvCtx.err
-			p.mu.Unlock()
-			break mainloop
-		case <-ticker.C:
-			p.mu.Lock()
-			handler := p.OnIdle
-			p.mu.Unlock()
-			if handler != nil {
-				handler()
-			}
-			if once || err != nil {
-				break mainloop
-			}
-			p.debugln("Run(): call sendICMP()")
-			queue, err = p.sendICMP(conn, conn6)
-		case r := <-recv:
-			p.debugln("Run(): <-recv")
-			p.procRecv(r, queue)
-		}
-	}
-
-	ticker.Stop()
-
-	p.debugln("Run(): close(recvCtx.stop)")
-	close(recvCtx.stop)
-	p.debugln("Run(): wait recvICMP()")
-	wg.Wait()
-
-	p.mu.Lock()
-	p.ctx.err = err
-	p.mu.Unlock()
-
-	p.debugln("Run(): close(p.ctx.done)")
-	close(p.ctx.done)
-	p.debugln("Run(): End")
-}
+// func (p *Pinger) runSync() {
+// 	p.debugln("Run(): Start")
+// 	var conn, conn6 *icmp.PacketConn
+// 	if p.hasIPv4 {
+// 		if conn = p.listen(ipv4Proto[p.network], p.source); conn == nil {
+// 			return
+// 		}
+// 		defer conn.Close()
+// 	}
+//
+// 	if p.hasIPv6 {
+// 		if conn6 = p.listen(ipv6Proto[p.network], p.source6); conn6 == nil {
+// 			return
+// 		}
+// 		defer conn6.Close()
+// 	}
+//
+// 	recv := make(chan *packet, 1)
+// 	recvCtx := newContext()
+// 	wg := new(sync.WaitGroup)
+//
+// 	p.debugln("Run(): call recvICMP()")
+// 	if conn != nil {
+// 		wg.Add(1)
+// 		go p.recvICMP(conn, recv, recvCtx, wg)
+// 	}
+// 	if conn6 != nil {
+// 		wg.Add(1)
+// 		go p.recvICMP(conn6, recv, recvCtx, wg)
+// 	}
+//
+// 	p.debugln("Run(): call sendICMP()")
+// 	queue, err := p.sendICMP(conn, conn6)
+//
+// 	ticker := time.NewTicker(p.MaxRTT)
+// 	//TODO add deadline
+//
+// mainloop:
+// 	for {
+// 		select {
+// 		case <-p.ctx.stop:
+// 			p.debugln("Run(): <-p.ctx.stop")
+// 			break mainloop
+// 		case <-recvCtx.done:
+// 			p.debugln("Run(): <-recvCtx.done")
+// 			p.mu.Lock()
+// 			err = recvCtx.err
+// 			p.mu.Unlock()
+// 			break mainloop
+// 		case <-ticker.C:
+// 			p.mu.Lock()
+// 			handler := p.OnIdle
+// 			p.mu.Unlock()
+// 			if handler != nil {
+// 				handler()
+// 			}
+// 			if once || err != nil {
+// 				break mainloop
+// 			}
+// 			p.debugln("Run(): call sendICMP()")
+// 			queue, err = p.sendICMP(conn, conn6)
+// 		case r := <-recv:
+// 			p.debugln("Run(): <-recv")
+// 			p.procRecv(r, queue)
+// 		}
+// 	}
+//
+// 	ticker.Stop()
+//
+// 	p.debugln("Run(): close(recvCtx.stop)")
+// 	close(recvCtx.stop)
+// 	p.debugln("Run(): wait recvICMP()")
+// 	wg.Wait()
+//
+// 	p.mu.Lock()
+// 	p.ctx.err = err
+// 	p.mu.Unlock()
+//
+// 	p.debugln("Run(): close(p.ctx.done)")
+// 	close(p.ctx.done)
+// 	p.debugln("Run(): End")
+// }
 
 func (p *Pinger) run(once bool) {
 	p.debugln("Run(): Start")
