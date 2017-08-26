@@ -396,9 +396,12 @@ func (p *Pinger) Stop() {
 // Stop stops RunLoop(). It must be called after RunLoop(). If not, it causes
 // panic.
 // Calls triggers the channel for done
-func (p *Pinger) BlockLoop() {
-	p.debugln("Unlocking loop")
+func (p *Pinger) StopAndSend() {
 	p.ctx.done <- true
+	p.debugln("StopAndSend(): close(p.ctx.stop)")
+	close(p.ctx.stop)
+	p.debugln("StopAndSend(): <-p.ctx.done")
+	<-p.ctx.done
 }
 
 // Err returns an error that is set by RunLoop(). It must be called after
