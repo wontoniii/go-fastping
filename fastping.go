@@ -721,6 +721,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 	case *net.UDPAddr:
 		ipaddr = &net.IPAddr{IP: adr.IP, Zone: adr.Zone}
 	default:
+		p.debugln("procRecv(): Wrong address type", recv.addr)
 		return
 	}
 
@@ -728,6 +729,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 	p.mu.Lock()
 	if _, ok := p.addrs[addr]; !ok {
 		p.mu.Unlock()
+		p.debugln("procRecv(): Addr ", addr, " not in pool of addresses")
 		return
 	}
 	p.mu.Unlock()
@@ -745,12 +747,14 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 		bytes = recv.bytes
 		proto = ProtocolIPv6ICMP
 	} else {
+		p.debugln("procRecv(): ", ipaddr.IP, " !isIPv4")
 		return
 	}
 
 	var m *icmp.Message
 	var err error
 	if m, err = icmp.ParseMessage(proto, bytes); err != nil {
+		p.debugln("procRecv(): Error parsing ICMP ", err)
 		return
 	}
 
@@ -764,9 +768,12 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 		p.mu.Lock()
 		if pkt.ID == p.id && pkt.Seq == p.seq {
 			rtt = time.Since(bytesToTime(pkt.Data[:TimeSliceLength]))
+		} else {
+			p.debugln("procRecv(): No ID mapping", p.id, p.seq)
 		}
 		p.mu.Unlock()
 	default:
+		p.debugln("procRecv(): Not an ICMP packet")
 		return
 	}
 
