@@ -150,25 +150,34 @@ type Pinger struct {
 	OnIdle func()
 	// If Debug is true, it prints debug messages to stdout.
 	Debug bool
+	// If true it runs at each instance it runs train of pings
+	Train bool
+	// Distance between trains. If 0 then no distance
+	TrainInt time.Duration
+	// The number of pings to send in a train
+	TrainSize int
 }
 
 // NewPinger returns a new Pinger struct pointer
 func NewPinger() *Pinger {
 	rand.Seed(time.Now().UnixNano())
 	return &Pinger{
-		id:      rand.Intn(0xffff),
-		seq:     rand.Intn(0xffff),
-		addrs:   make(map[string]*net.IPAddr),
-		network: "ip",
-		source:  "",
-		source6: "",
-		hasIPv4: false,
-		hasIPv6: false,
-		Size:    TimeSliceLength,
-		MaxRTT:  time.Second,
-		OnRecv:  nil,
-		OnIdle:  nil,
-		Debug:   false,
+		id:        rand.Intn(0xffff),
+		seq:       rand.Intn(0xffff),
+		addrs:     make(map[string]*net.IPAddr),
+		network:   "ip",
+		source:    "",
+		source6:   "",
+		hasIPv4:   false,
+		hasIPv6:   false,
+		Size:      TimeSliceLength,
+		MaxRTT:    time.Second,
+		OnRecv:    nil,
+		OnIdle:    nil,
+		Debug:     false,
+		Train:     false,
+		TrainInt:  time.Millisecond * 10,
+		TrainSize: 2,
 	}
 }
 
@@ -570,7 +579,13 @@ mainloop:
 				break mainloop
 			}
 			p.debugln("Run(): call sendICMP()")
-			queue, err = p.sendICMP(conn, conn6)
+			if p.Train {
+				for i := 0; i < p.TrainSize; i++ {
+					queue, err = p.sendICMP(conn, conn6)
+				}
+			} else {
+				queue, err = p.sendICMP(conn, conn6)
+			}
 		case r := <-recv:
 			p.debugln("Run(): <-recv")
 			p.procRecv(r, queue)
