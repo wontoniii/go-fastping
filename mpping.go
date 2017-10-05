@@ -143,6 +143,16 @@ type Pinger struct {
 	// the library calls an idle callback function. It is also used for an
 	// interval time of RunLoop() method
 	MaxRTT time.Duration
+
+	// Gamma to be used to determine the distribution of pings
+	Gamma time.Duration
+	// If true it runs at each instance it runs train of pings
+	Train bool
+	// Distance between trains. If 0 then no distance
+	TrainInt time.Duration
+	// The number of pings to send in a train
+	TrainSize int
+
 	// OnRecv is called with a response packet's source address and its
 	// elapsed time when Pinger receives a response packet.
 	OnRecv func(*net.IPAddr, time.Duration)
@@ -150,12 +160,6 @@ type Pinger struct {
 	OnIdle func()
 	// If Debug is true, it prints debug messages to stdout.
 	Debug bool
-	// If true it runs at each instance it runs train of pings
-	Train bool
-	// Distance between trains. If 0 then no distance
-	TrainInt time.Duration
-	// The number of pings to send in a train
-	TrainSize int
 }
 
 // NewPinger returns a new Pinger struct pointer
@@ -172,12 +176,23 @@ func NewPinger() *Pinger {
 		hasIPv6:   false,
 		Size:      TimeSliceLength,
 		MaxRTT:    time.Second,
-		OnRecv:    nil,
-		OnIdle:    nil,
-		Debug:     false,
+		Gamma:     time.Millisecond * 100,
 		Train:     false,
 		TrainInt:  time.Millisecond * 10,
 		TrainSize: 2,
+		OnRecv:    nil,
+		OnIdle:    nil,
+		Debug:     false,
+	}
+}
+
+// Get next wait time to send ping based on whether it has to be constant or
+// uniformly distributed
+func (p *Pinger) getNextWait() time.Duration {
+	if p.Gamma > 0 {
+		return p.MaxRTT + time.Duration(rand.Intn(2*int(p.Gamma))) - p.Gamma
+	} else {
+		return p.MaxRTT
 	}
 }
 
@@ -553,8 +568,7 @@ func (p *Pinger) run(once bool) {
 
 	p.debugln("Run(): call sendICMP()")
 	queue, err := p.sendICMP(conn, conn6)
-
-	ticker := time.NewTicker(p.MaxRTT)
+	timer := time.NewTimer(p.getNextWait())
 
 mainloop:
 	for {
@@ -568,7 +582,7 @@ mainloop:
 			err = recvCtx.err
 			p.mu.Unlock()
 			break mainloop
-		case <-ticker.C:
+		case <-timer.C:
 			p.mu.Lock()
 			handler := p.OnIdle
 			p.mu.Unlock()
@@ -579,20 +593,17 @@ mainloop:
 				break mainloop
 			}
 			p.debugln("Run(): call sendICMP()")
-			if p.Train {
-				for i := 0; i < p.TrainSize; i++ {
-					queue, err = p.sendICMP(conn, conn6)
-				}
-			} else {
-				queue, err = p.sendICMP(conn, conn6)
-			}
+			queue, err = p.sendICMP(conn, conn6)
+			timer.Reset(p.getNextWait())
 		case r := <-recv:
 			p.debugln("Run(): <-recv")
 			p.procRecv(r, queue)
 		}
 	}
 
-	ticker.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
 
 	p.debugln("Run(): close(recvCtx.stop)")
 	close(recvCtx.stop)
@@ -778,15 +789,21 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 	}
 
 	var rtt time.Duration
+	idTest := true
 	switch pkt := m.Body.(type) {
 	case *icmp.Echo:
 		p.mu.Lock()
 		if pkt.ID == p.id && pkt.Seq == p.seq {
 			rtt = time.Since(bytesToTime(pkt.Data[:TimeSliceLength]))
 		} else {
-			p.debugln("procRecv(): No ID mapping", p.id, p.seq)
+			idTest = false
 		}
 		p.mu.Unlock()
+		if idTest == true {
+			p.debugln("procRecv(): ok mapping IDs ", pkt.ID, p.id, pkt.Seq, p.seq)
+		} else {
+			p.debugln("procRecv(): error mapping IDs ", pkt.ID, p.id, pkt.Seq, p.seq)
+		}
 	default:
 		p.debugln("procRecv(): Not an ICMP packet")
 		return
