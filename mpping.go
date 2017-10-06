@@ -35,7 +35,7 @@
 //
 //	sudo go test
 //
-package fastping
+package mpping
 
 import (
 	"errors"
@@ -159,7 +159,7 @@ type Pinger struct {
 
 	// OnRecv is called with a response packet's source address and its
 	// elapsed time when Pinger receives a response packet.
-	OnRecv func(*net.IPAddr, time.Duration)
+	OnRecv func(*net.IPAddr, time.Duration, int)
 	// OnIdle is called when MaxRTT time passed
 	OnIdle func()
 	// If Debug is true, it prints debug messages to stdout.
@@ -332,7 +332,7 @@ func (p *Pinger) RemoveIPAddr(ip *net.IPAddr) {
 func (p *Pinger) AddHandler(event string, handler interface{}) error {
 	switch event {
 	case "receive":
-		if hdl, ok := handler.(func(*net.IPAddr, time.Duration)); ok {
+		if hdl, ok := handler.(func(*net.IPAddr, time.Duration, int)); ok {
 			p.mu.Lock()
 			p.OnRecv = hdl
 			p.mu.Unlock()
@@ -745,7 +745,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 					handler := p.OnRecv
 					p.mu.Unlock()
 					if handler != nil {
-						handler(ipaddr, rtt)
+						handler(ipaddr, rtt, pkt.Seq)
 					}
 				} else {
 					p.debugln("procRecv(): error mapping Seqs ", pkt.Seq, h)
