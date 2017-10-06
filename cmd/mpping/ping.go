@@ -19,10 +19,14 @@ type response struct {
 	seqn int
 }
 
-func ping(hostname, source string, useUDP bool, count, interval, trainS, trainI, gamma int) {
+func ping(hostname, source string, useUDP, debug bool, count, interval, trainS, trainI, gamma int) {
 	p := mpping.NewPinger()
 	if useUDP {
 		p.Network("udp")
+	}
+
+	if debug {
+		p.Debug = true
 	}
 
 	netProto := "ip4:icmp"
@@ -43,12 +47,12 @@ func ping(hostname, source string, useUDP bool, count, interval, trainS, trainI,
 		p.Train = true
 		p.TrainSize = trainS
 		if trainI > 0 {
-			p.TrainInt = time.Duration(trainI)
+			p.TrainInt = time.Duration(trainI) * time.Millisecond
 		}
 	}
 
 	if gamma > 0 {
-		p.Gamma = time.Duration(gamma)
+		p.Gamma = time.Duration(gamma) * time.Millisecond
 	}
 
 	p.AddIPAddr(ra)
@@ -61,7 +65,7 @@ func ping(hostname, source string, useUDP bool, count, interval, trainS, trainI,
 		onIdle <- true
 	}
 
-	p.MaxRTT = time.Second
+	p.MaxRTT = time.Duration(interval) * time.Millisecond
 
 	var sent, received, crec int
 	var min, max, avg, mdev float32
@@ -69,7 +73,7 @@ func ping(hostname, source string, useUDP bool, count, interval, trainS, trainI,
 	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", hostname, ra.String(), 0, 0)
 	st := time.Now()
 
-	sent = 1
+	sent = trainS
 	p.RunLoop()
 
 	c := make(chan os.Signal, 1)
@@ -86,7 +90,13 @@ loop:
 			received += 1
 			crec += 1
 			fmt.Printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n", p.Size+56, res.addr, res.seqn, 128, float32(res.rtt)/float32(time.Millisecond))
+			if sent/trainS >= count && received/trainS == count {
+				break loop
+			}
 		case <-onIdle:
+			if sent/trainS >= count {
+				break loop
+			}
 			sent += trainS
 			if crec == 0 {
 				fmt.Printf("%s : unreachable\n", hostname)
@@ -131,10 +141,11 @@ loop:
 }
 
 func main() {
-	var useUDP bool
+	var useUDP, debug bool
 	var count, interval, trainS, trainI, gamma int
 	var source, hostname string
 	flag.BoolVar(&useUDP, "u", false, "use non-privileged datagram-oriented UDP as ICMP endpoints (shorthand)")
+	flag.BoolVar(&debug, "d", false, "debug statements")
 	flag.IntVar(&count, "c", 10, "number of probes to send")
 	flag.IntVar(&interval, "i", 1000, "average for probes interarrival (milliseconds)")
 	flag.IntVar(&trainS, "t", 1, "number of pings in single train")
@@ -153,6 +164,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	ping(hostname, source, useUDP, count, interval, trainS, trainI, gamma)
+	ping(hostname, source, useUDP, debug, count, interval, trainS, trainI, gamma)
 
 }
