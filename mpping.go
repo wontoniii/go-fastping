@@ -141,8 +141,13 @@ type Pinger struct {
 	ctx     *context
 	mu      sync.Mutex
 
-	// Size in bytes of the payload to send
+	// Set whether size should be constant or from a pattern
+	UsePattern bool
+	// If no pattern, size in bytes of the payload to send
 	Size int
+	// If pattern, the list of sizes to use
+	Pattern []int
+
 	// Number of (nano,milli)seconds of an idle timeout. Once it passed,
 	// the library calls an idle callback function. It is also used for an
 	// interval time of RunLoop() method
@@ -170,22 +175,23 @@ type Pinger struct {
 func NewPinger() *Pinger {
 	rand.Seed(time.Now().UnixNano())
 	return &Pinger{
-		hosts:     make(map[string]pingHost),
-		rounds:    1,
-		network:   "ip",
-		source:    "",
-		source6:   "",
-		hasIPv4:   false,
-		hasIPv6:   false,
-		Size:      TimeSliceLength,
-		MaxRTT:    time.Second,
-		Gamma:     time.Millisecond * 100,
-		Train:     false,
-		TrainInt:  time.Millisecond * 10,
-		TrainSize: 2,
-		OnRecv:    nil,
-		OnIdle:    nil,
-		Debug:     false,
+		hosts:      make(map[string]pingHost),
+		rounds:     1,
+		network:    "ip",
+		source:     "",
+		source6:    "",
+		hasIPv4:    false,
+		hasIPv6:    false,
+		UsePattern: false,
+		Size:       TimeSliceLength,
+		MaxRTT:     time.Second,
+		Gamma:      time.Millisecond * 100,
+		Train:      false,
+		TrainInt:   time.Millisecond * 10,
+		TrainSize:  2,
+		OnRecv:     nil,
+		OnIdle:     nil,
+		Debug:      false,
 	}
 }
 
@@ -196,6 +202,17 @@ func (p *Pinger) getNextWait() time.Duration {
 		return p.MaxRTT + time.Duration(rand.Intn(2*int(p.Gamma))) - p.Gamma
 	} else {
 		return p.MaxRTT
+	}
+}
+
+// Use a pattern of sizes to transmit data
+func (p *Pinger) SetPattern(pattern []int) {
+	if len(pattern) <= 0 {
+		return
+	} else {
+		p.UsePattern = true
+		p.Pattern = make([]int, len(pattern))
+		copy(p.Pattern, pattern)
 	}
 }
 
@@ -278,7 +295,7 @@ func (p *Pinger) AddIPAddr(ip *net.IPAddr) {
 	p.mu.Lock()
 	p.hosts[ip.String()] = pingHost{
 		id:   rand.Intn(0xffff),
-		seqn: rand.Intn(0xffff),
+		seqn: 0,
 		addr: ip,
 	}
 	if isIPv4(ip.IP) {
@@ -619,7 +636,11 @@ func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[int]map[int]bool, e
 		for i := 0; i < p.rounds; i++ {
 			queue[host.id][host.seqn+i] = true
 			p.debugln("sendICMP(): Invoke goroutine")
-			go delayedTransmit(p.TrainInt*time.Duration(i), typ, cn, dst, p.Size, host.id, host.seqn+i)
+			if p.UsePattern {
+				go delayedTransmit(p.TrainInt*time.Duration(i), typ, cn, dst, p.Pattern[(host.seqn+i)%len(p.Pattern)], host.id, host.seqn+i)
+			} else {
+				go delayedTransmit(p.TrainInt*time.Duration(i), typ, cn, dst, p.Size, host.id, host.seqn+i)
+			}
 		}
 	}
 

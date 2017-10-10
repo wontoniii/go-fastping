@@ -1,3 +1,7 @@
+/*
+ *
+ */
+
 package main
 
 import (
@@ -6,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +24,7 @@ type response struct {
 	seqn int
 }
 
-func ping(hostname, source string, useUDP, debug bool, count, interval, trainS, trainI, gamma int) {
+func ping(hostname, source string, useUDP, debug bool, count, interval, trainS, trainI, gamma int, pattern []int) {
 	p := mpping.NewPinger()
 	if useUDP {
 		p.Network("udp")
@@ -53,6 +58,10 @@ func ping(hostname, source string, useUDP, debug bool, count, interval, trainS, 
 
 	if gamma > 0 {
 		p.Gamma = time.Duration(gamma) * time.Millisecond
+	}
+
+	if len(pattern) > 0 {
+		p.SetPattern(pattern)
 	}
 
 	p.AddIPAddr(ra)
@@ -143,7 +152,8 @@ loop:
 func main() {
 	var useUDP, debug bool
 	var count, interval, trainS, trainI, gamma int
-	var source, hostname string
+	var source, hostname, pattern string
+	var intPattern []int
 	flag.BoolVar(&useUDP, "u", false, "use non-privileged datagram-oriented UDP as ICMP endpoints (shorthand)")
 	flag.BoolVar(&debug, "d", false, "debug statements")
 	flag.IntVar(&count, "c", 10, "number of probes to send")
@@ -152,6 +162,7 @@ func main() {
 	flag.IntVar(&trainI, "I", 100, "interval in between probes in a train (milliseconds)")
 	flag.IntVar(&gamma, "g", 0, "gamma for uniform distribution (milliseconds)")
 	flag.StringVar(&source, "s", "", "source address")
+	flag.StringVar(&pattern, "p", "", "pattern of sizes to use in comma separated format (no spaces)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage:\n  %s [options] hostname [source]\n\nOptions:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -164,6 +175,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	ping(hostname, source, useUDP, debug, count, interval, trainS, trainI, gamma)
+	if pattern != "" {
+		//Process pattern
+		vals := strings.Split(pattern, ",")
+		for _, i := range vals {
+			j, err := strconv.Atoi(i)
+			if err != nil {
+				flag.Usage()
+				os.Exit(1)
+			}
+			intPattern = append(intPattern, j)
+		}
+	}
+
+	ping(hostname, source, useUDP, debug, count, interval, trainS, trainI, gamma, intPattern)
 
 }
