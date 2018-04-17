@@ -554,9 +554,7 @@ mainloop:
 		}
 	}
 
-	if !timer.Stop() {
-		<-timer.C
-	}
+	timer.Stop()
 
 	p.debugln("Run(): close(recvCtx.stop)")
 	close(recvCtx.stop)
