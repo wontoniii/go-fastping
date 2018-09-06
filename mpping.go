@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"sync"
@@ -148,23 +149,58 @@ type Pinger struct {
 	// If pattern, the list of sizes to use
 	Pattern []int
 
+	//Variable to keep track of how many time we triggered SendIMCP
+	SentICMP int
+
+	//Procesed ICMP counter
+	ProcessedICMP int
+
+	//Slice to keep track of all the RTTs collected
+	//RTTS []time.Duration
+
+	//Slice to keep track of all the Sequence numbers collected
+	//SeqsNums []int
+
+	//Map to keep track of ICMP_ECHO_REPLIES Sequence numbers and RTT value
+	SeqsAndRTTS map[int]float32
+
+	//Map to track seq.numbers and times
+	SeqsAndTime map[int]string
+
+	//Map to keep track of time
+	//times []string
+
 	// Number of (nano,milli)seconds of an idle timeout. Once it passed,
 	// the library calls an idle callback function. It is also used for an
 	// interval time of RunLoop() method
+	// Distance between Trains, in other word time distance between batches of pings
 	MaxRTT time.Duration
+
+	//Tiemout - Time we wait for a reponse before calling the OnIdle function,
+	//this is a differnet timer from the MaxRTT which will be associated to how
+	//often we send an IMCP message and process the received message.
+	Timeout time.Duration
+
+	// Lambda, to follow an exponental distribution and apply Poisson analysis
+	// we define lambda which is the rate parameter.
+	Rate float64
 
 	// Gamma to be used to determine the distribution of pings
 	Gamma time.Duration
 	// If true it runs at each instance it runs train of pings
 	Train bool
+
 	// Distance between trains. If 0 then no distance
+	// Time distance between pings included in a batch of pings
 	TrainInt time.Duration
+
 	// The number of pings to send in a train
 	TrainSize int
 
-	// OnRecv is called with a response packet's source address and its
-	// elapsed time when Pinger receives a response packet.
+	// OnRecv is called with a response packet's source address, its
+	// elapsed time when Pinger receives a response packet and the sequence number.
 	OnRecv func(*net.IPAddr, time.Duration, int)
+
 	// OnIdle is called when MaxRTT time passed
 	OnIdle func()
 	// If Debug is true, it prints debug messages to stdout.
@@ -175,31 +211,64 @@ type Pinger struct {
 func NewPinger() *Pinger {
 	rand.Seed(time.Now().UnixNano())
 	return &Pinger{
-		hosts:      make(map[string]pingHost),
-		rounds:     1,
-		network:    "ip",
-		source:     "",
-		source6:    "",
-		hasIPv4:    false,
-		hasIPv6:    false,
-		UsePattern: false,
-		Size:       TimeSliceLength,
-		MaxRTT:     time.Second,
-		Gamma:      time.Millisecond * 100,
-		Train:      false,
-		TrainInt:   time.Millisecond * 10,
-		TrainSize:  2,
-		OnRecv:     nil,
-		OnIdle:     nil,
-		Debug:      false,
+		hosts:         make(map[string]pingHost),
+		SeqsAndRTTS:   make(map[int]float32),
+		SeqsAndTime:   make(map[int]string),
+		rounds:        1,
+		SentICMP:      0,
+		ProcessedICMP: 0,
+		network:       "ip",
+		source:        "",
+		source6:       "",
+		hasIPv4:       false,
+		hasIPv6:       false,
+		UsePattern:    false,
+		Size:          TimeSliceLength,
+		MaxRTT:        time.Second,
+		Timeout:       time.Second * 1,
+		Gamma:         time.Millisecond * 0,
+		Rate:          0.0,
+		Train:         false,
+		TrainInt:      time.Millisecond * 0,
+		TrainSize:     1,
+		OnRecv:        nil,
+		OnIdle:        nil,
+		Debug:         false,
 	}
 }
 
 // Get next wait time to send ping based on whether it has to be constant or
 // uniformly distributed
 func (p *Pinger) getNextWait() time.Duration {
-	if p.Gamma > 0 {
-		return p.MaxRTT + time.Duration(rand.Intn(2*int(p.Gamma))) - p.Gamma
+	//var temp time.Duration
+	var lambda, next_interval float64
+	var next_interval_time time.Duration
+	if p.Rate > float64(0) {
+		lambda = float64(1) / p.Rate
+		fmt.Printf("Next Batch.\n")
+		//fmt.Printf("%s \n", time.Now())
+		//temp = p.MaxRTT + time.Duration(rand.Intn(2*int(p.Gamma))) - p.Gamma
+		//temp = p.MaxRTT + time.Duration(-math.Log(1-rand.Float64())/rateParameter)
+		//temp = p.MaxRTT + time.Duration(-math.Log(1-rand.Float64())/lambda)
+
+		//fmt.Printf("Value of Rate Defined is: %v\n", p.Rate)
+
+		//We multiply by 60,000 as in each minute we have 60,000 msecs
+		//We use minutes as reference as our interval is defined by a minute
+		//Therefore we go from msec to minutes by multiplying by 60,000
+		next_interval = (-math.Log(1-rand.Float64()) / lambda) * 60000
+
+		//fmt.Printf("NextWaitTime is: %v\n", next_interval)
+
+		next_interval_time = time.Millisecond * time.Duration(next_interval)
+		//fmt.Printf("NextWaitTime in Milliseconds is: %v\n", next_interval_time)
+		//fmt.Printf("Interval + NextWaitTime value is: %v\n", p.MaxRTT+next_interval_time)
+
+		//temp = p.MaxRTT + time.Duration(next_interval)
+		//fmt.Printf("Value of Next Wait Time is: %v\n", temp)
+		//fmt.Println()
+		//return temp
+		return p.MaxRTT + next_interval_time
 	} else {
 		return p.MaxRTT
 	}
@@ -277,7 +346,7 @@ func (p *Pinger) AddIP(ipaddr string) error {
 	p.mu.Lock()
 	p.hosts[addr.String()] = pingHost{
 		id:   rand.Intn(0xffff),
-		seqn: rand.Intn(0xffff),
+		seqn: 0,
 		addr: &net.IPAddr{IP: addr},
 	}
 	if isIPv4(addr) {
@@ -335,10 +404,10 @@ func (p *Pinger) RemoveIPAddr(ip *net.IPAddr) {
 //
 // "receive" handler should be
 //
-//	func(addr *net.IPAddr, rtt time.Duration)
+//	func(addr *net.IPAddr, rtt time.Duration, seqn int)
 //
 // type function. The handler is called with a response packet's source address
-// and its elapsed time when Pinger receives a response packet.
+// and its elapsed time when Pinger receives a response packet and the sequence number of the ICMP message.
 //
 // "idle" handler should be
 //
@@ -521,7 +590,12 @@ func (p *Pinger) run(once bool) {
 
 	p.debugln("Run(): call sendICMP()")
 	queue, err := p.sendICMP(conn, conn6)
-	timer := time.NewTimer(p.getNextWait())
+
+	//ticker := time.NewTicker(p.MaxRTT)
+	//timer := time.NewTimer(p.getNextWait()) // Original Line
+	timer := time.NewTimer(p.Timeout) //We set the OnIdle to be called after 1 sec of timeout.
+	// This time we do not send ICMP message is received.
+	timer2 := time.NewTimer(p.getNextWait()) // Line to decide when to send the next IMCP
 
 mainloop:
 	for {
@@ -545,16 +619,23 @@ mainloop:
 			if once || err != nil {
 				break mainloop
 			}
-			p.debugln("Run(): call sendICMP()")
+			//p.debugln("Run(): call sendICMP()")
+			//queue, err = p.sendICMP(conn, conn6)
+			//timer.Reset(p.getNextWait()) // Original Line
+			//timer.Reset(p.getNextWait()) // Modified Line
+		case <-timer2.C:
 			queue, err = p.sendICMP(conn, conn6)
-			timer.Reset(p.getNextWait())
+			timer2.Reset(p.getNextWait())
 		case r := <-recv:
 			p.debugln("Run(): <-recv")
 			p.procRecv(r, queue)
 		}
 	}
+	//ticker.Stop()
 
-	timer.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
 
 	p.debugln("Run(): close(recvCtx.stop)")
 	close(recvCtx.stop)
@@ -631,13 +712,29 @@ func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[int]map[int]bool, e
 		if p.network == "udp" {
 			dst = &net.UDPAddr{IP: host.addr.IP, Zone: host.addr.Zone}
 		}
-		for i := 0; i < p.rounds; i++ {
+		for i := 1; i <= p.rounds; i++ {
 			queue[host.id][host.seqn+i] = true
 			p.debugln("sendICMP(): Invoke goroutine")
 			if p.UsePattern {
+				/*
+					fmt.Printf("================================ We entered usePattern for sendICMP ================================ \n")
+					fmt.Printf("Value of i: %v.\n", i)
+					fmt.Printf("Value of p.TrainInt: %v.\n", p.TrainInt)
+					fmt.Printf("Value of delay being sent to the Delay Function: %v.\n", p.TrainInt*time.Duration(i))
+					fmt.Printf("================================ End of case with Use Pattern sendICMP ================================ \n")
+				*/
 				go delayedTransmit(p.TrainInt*time.Duration(i), typ, cn, dst, p.Pattern[(host.seqn+i)%len(p.Pattern)], host.id, host.seqn+i)
+				p.SentICMP++
 			} else {
+				/*
+					fmt.Printf("================================ We entered Without usePattern for sendICMP ================================ \n")
+					fmt.Printf("Value of i: %v.\n", i)
+					fmt.Printf("Value of p.TrainInt: %v.\n", p.TrainInt)
+					fmt.Printf("Value of delay being sent to the Delay Function: %v.\n", p.TrainInt*time.Duration(i))
+					fmt.Printf("================================ End of case with Without Pattern sendICMP ================================ \n")
+				*/
 				go delayedTransmit(p.TrainInt*time.Duration(i), typ, cn, dst, p.Size, host.id, host.seqn+i)
+				p.SentICMP++
 			}
 		}
 	}
@@ -715,6 +812,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 	}
 
 	addr := ipaddr.String()
+	//fmt.Printf("Value of address: %v.\n", addr)
 	p.mu.Lock()
 	if _, ok := p.hosts[addr]; !ok {
 		p.mu.Unlock()
@@ -722,6 +820,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 		return
 	}
 	host := p.hosts[addr]
+	//fmt.Printf("Value of host's address: %v.\n", host.addr)
 	p.mu.Unlock()
 
 	var bytes []byte
@@ -753,8 +852,30 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 	}
 
 	var rtt time.Duration
+	var rttFormatted float32
+	var seqNum int
+	var timestamp = time.Now()
 	switch pkt := m.Body.(type) {
 	case *icmp.Echo:
+		//handler := p.OnRecv
+		rtt = time.Since(bytesToTime(pkt.Data[:TimeSliceLength]))
+		rttFormatted = float32(rtt) / float32(time.Millisecond)
+		seqNum = pkt.Seq
+		//handler(ipaddr, rtt, pkt.Seq)
+		//fmt.Printf("After validating ICMP message, value of rtt: %v.\n", rtt)
+
+		p.SeqsAndRTTS[seqNum] = rttFormatted
+		p.SeqsAndTime[seqNum] = timestamp.Format("2006-01-02 15:04:05")
+
+		//p.RTTS = append(p.RTTS, rtt)
+		//p.SeqsNums = append(p.SeqsNums, seqNum)
+
+		p.ProcessedICMP++
+
+		//fmt.Printf("len=%d cap=%d %v\n", len(p.RTTS), cap(p.RTTS), p.RTTS)
+		//fmt.Printf("\n")
+		//fmt.Printf("Value of Host ID: %v.\n", host.id)
+		//fmt.Printf("Value of Packet ID: %v.\n", pkt.ID)
 		if host.id == pkt.ID {
 			if h, ok := queue[pkt.ID]; ok {
 				if _, ok := h[pkt.Seq]; ok {
@@ -764,6 +885,9 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 					handler := p.OnRecv
 					p.mu.Unlock()
 					if handler != nil {
+						//fmt.Printf("After validating host id, matches packet id, Value of rtt: %v.\n", rtt)
+						//p.RTTS = append(p.RTTS, rtt)
+						//fmt.Printf("len=%d cap=%d %v\n", len(p.RTTS), cap(p.RTTS), p.RTTS)
 						handler(ipaddr, rtt, pkt.Seq)
 					}
 				} else {
@@ -776,6 +900,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[int]map[int]bool) {
 	default:
 		p.debugln("procRecv(): Not an ICMP packet")
 		return
+
 	}
 
 }
